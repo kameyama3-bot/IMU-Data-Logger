@@ -131,7 +131,7 @@
                 
                 try {
                     const startSeq = data.getUint32(0, true);
-                    for (let i = 0; i < 5; i++) {
+                    for (let i = 0; i < 10; i++) {
                         const offset = 4 + (i * 12);
                         const ax = data.getInt16(offset + 0, true) / 1000.0;
                         const ay = data.getInt16(offset + 2, true) / 1000.0;
@@ -139,13 +139,13 @@
                         const gx = data.getInt16(offset + 6, true) / 1000.0;
                         const gy = data.getInt16(offset + 8, true) / 1000.0;
                         const gz = data.getInt16(offset + 10, true) / 1000.0;
-                        const reconTime = (pcTimestamp - (4 - i) * 10).toFixed(2);
+                        const reconTime = (pcTimestamp - (9 - i) * 10).toFixed(2);
 
                         csvData += `${reconTime},${startSeq + i},${ax.toFixed(3)},${ay.toFixed(3)},${az.toFixed(3)},${gx.toFixed(3)},${gy.toFixed(3)},${gz.toFixed(3)}\n`;
                         sampleCount++;
                     }
                     
-                    if (sampleCount % 100 < 5) {
+                    if (sampleCount % 100 < 10) {
                         document.getElementById('count').innerText = sampleCount;
                         document.getElementById('console').innerText = `Batch start seq: ${startSeq}`;
                     }
