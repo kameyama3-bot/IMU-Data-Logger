@@ -2,34 +2,27 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>IMU Field Station (Final Version with Power Management)</title>
+    <title>IMU Field Station (Gen12 Fixed Timestamp)</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #263238; color: #eceff1; padding: 20px; }
         .card { background: #37474f; padding: 30px; border-radius: 15px; display: inline-block; box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 520px; }
-        
         .label-selector { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
         .radio-btn { flex: 1; padding: 15px; border-radius: 8px; cursor: pointer; border: 2px solid #546e7a; transition: 0.3s; font-weight: bold; }
         input[type="radio"] { display: none; }
         #labelFocused:checked + label { background: #00897b; border-color: #64ffda; color: white; box-shadow: 0 0 10px rgba(100,255,218,0.3); }
         #labelUnfocused:checked + label { background: #7e57c2; border-color: #b39ddb; color: white; box-shadow: 0 0 10px rgba(179,157,219,0.3); }
-        
         button { padding: 15px 25px; font-size: 16px; cursor: pointer; margin: 8px; border-radius: 8px; border: none; transition: 0.3s; font-weight: bold; }
         .btn-connect { background: #607d8b; color: white; width: 100%; }
         .btn-on { background: #d32f2f; color: white; }
         .btn-off { background: #455a64; color: white; }
-        
-        /* Power OFFボタン専用スタイル */
         .btn-power { background: #546e7a; color: #eceff1; width: 100%; margin-top: 20px; border: 2px solid #78909c; font-size: 14px; }
         .btn-power:hover { background: #c62828; color: white; border-color: #ef5350; }
-
         button:disabled { background: #263238 !important; color: #546e7a !important; cursor: not-allowed; opacity: 0.6; }
-        
         #count { font-size: 48px; font-weight: bold; color: #64ffda; margin: 10px 0; }
         .status-box { padding: 12px; margin: 15px 0; border-radius: 8px; font-size: 18px; border: 2px solid transparent; }
         .logging { border-color: #f44336; background: rgba(244, 67, 54, 0.2); color: #ff5252; animation: blink 1.5s infinite; }
         .waiting { border-color: #4caf50; background: rgba(76, 175, 80, 0.1); color: #81c784; }
         .shutdown { border-color: #f44336; background: #b71c1c; color: white; }
-
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
         #fps { font-size: 14px; color: #90a4ae; margin-bottom: 5px; }
         hr { border: 0; border-top: 1px solid #546e7a; margin: 20px 0; }
@@ -38,14 +31,13 @@
 <body>
 
 <div class="card">
-    <h2 style="margin-top:0;">IMU Field Station <span style="font-weight:normal; font-size:14px;">Gen12 / Binary-Pack</span></h2>
+    <h2 style="margin-top:0;">IMU Field Station <span style="font-weight:normal; font-size:14px;">Gen12 / Fixed-Sync-10</span></h2>
     <button class="btn-connect" onclick="connectBLE()" id="connBtn">1. Bluetooth 接続</button>
     <div id="statusBox" class="status-box">BLE未接続</div>
 
     <div class="label-selector" id="labelGroup">
         <input type="radio" id="labelFocused" name="dataLabel" value="focused" checked>
         <label for="labelFocused" class="radio-btn">FOCUSED (注視)</label>
-        
         <input type="radio" id="labelUnfocused" name="dataLabel" value="unfocused">
         <label for="labelUnfocused" class="radio-btn">UNFOCUSED (非注視)</label>
     </div>
@@ -67,7 +59,7 @@
     const SERVICE_UUID = "8f460216-0158-453c-9774-65158a1f8796";
     const GESTURE_CHAR_UUID = "8f460217-0158-453c-9774-65158a1f8796";
     const CONTROL_CHAR_UUID = "8f460218-0158-453c-9774-65158a1f8796";
-    const POWER_CHAR_UUID = "8f460219-0158-453c-9774-65158a1f8796"; // 電源制御用UUID
+    const POWER_CHAR_UUID = "8f460219-0158-453c-9774-65158a1f8796";
     
     let csvData = "";
     const csvHeader = "timestamp_ms,seq_num,ax,ay,az,gx,gy,gz\n";
@@ -78,6 +70,10 @@
     let controlChar;
     let powerChar;
     
+    // --- タイムスタンプ管理用変数 ---
+    let lastTimeMark = 0;
+    const SAMPLE_INTERVAL = 10; // 100Hz = 10ms
+
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
     function playTone(freq, duration, type='sine', vol=0.1) {
@@ -93,7 +89,6 @@
         osc.stop(audioCtx.currentTime + duration);
     }
 
-    // 1秒おきのパフォーマンス監視
     setInterval(() => {
         if (!isCurrentlyRecording) return;
         const currentFPS = sampleCount - lastCheckCount;
@@ -113,12 +108,12 @@
             
             const gestureChar = await service.getCharacteristic(GESTURE_CHAR_UUID);
             controlChar = await service.getCharacteristic(CONTROL_CHAR_UUID);
-            powerChar = await service.getCharacteristic(POWER_CHAR_UUID); // Power特性を取得
+            powerChar = await service.getCharacteristic(POWER_CHAR_UUID);
 
             statusBox.innerText = "接続済み: 待機中";
             statusBox.className = "status-box waiting";
             document.getElementById('onBtn').disabled = false;
-            document.getElementById('powerBtn').disabled = false; // 電源ボタンを有効化
+            document.getElementById('powerBtn').disabled = false;
             connBtn.disabled = true;
             playTone(880, 0.1);
 
@@ -127,10 +122,16 @@
                 if (!isCurrentlyRecording || isCommunicating) return;
 
                 const data = event.target.value;
-                const pcTimestamp = performance.now();
                 
                 try {
                     const startSeq = data.getUint32(0, true);
+
+                    // --- 修正：タイムスタンプの線形補間ロジック ---
+                    if (sampleCount === 0) {
+                        // 記録開始時の最初のパケットだけPC時刻を基準にする
+                        lastTimeMark = performance.now() - (9 * SAMPLE_INTERVAL);
+                    }
+
                     for (let i = 0; i < 10; i++) {
                         const offset = 4 + (i * 12);
                         const ax = data.getInt16(offset + 0, true) / 1000.0;
@@ -139,7 +140,10 @@
                         const gx = data.getInt16(offset + 6, true) / 1000.0;
                         const gy = data.getInt16(offset + 8, true) / 1000.0;
                         const gz = data.getInt16(offset + 10, true) / 1000.0;
-                        const reconTime = (pcTimestamp - (9 - i) * 10).toFixed(2);
+
+                        // 前のサンプルの時刻に10msを足し続ける
+                        const reconTime = lastTimeMark.toFixed(2);
+                        lastTimeMark += SAMPLE_INTERVAL;
 
                         csvData += `${reconTime},${startSeq + i},${ax.toFixed(3)},${ay.toFixed(3)},${az.toFixed(3)},${gx.toFixed(3)},${gy.toFixed(3)},${gz.toFixed(3)}\n`;
                         sampleCount++;
@@ -149,7 +153,6 @@
                         document.getElementById('count').innerText = sampleCount;
                         document.getElementById('console').innerText = `Batch start seq: ${startSeq}`;
                     }
-                    if (sampleCount % 1000 < 5) playTone(440, 0.05);
                 } catch (err) { console.error("Decode Error:", err); }
             });
 
@@ -181,6 +184,7 @@
                 csvData = csvHeader;
                 sampleCount = 0;
                 lastCheckCount = 0;
+                // 開始時に時刻計算をリセットするため
                 isCurrentlyRecording = true;
                 statusBox.className = "status-box logging";
                 statusBox.innerText = "● 記録中 (" + getSelectedLabel().toUpperCase() + ")";
@@ -202,32 +206,19 @@
         } finally { isCommunicating = false; }
     }
 
-    // 電源オフ指令
     async function powerOff() {
         if (!powerChar) return;
         if (!confirm("システムの電源を完全にオフにしますか？\n（リトリガを停止し、約30秒後にシャットダウンします）")) return;
-
         isCommunicating = true;
         const statusBox = document.getElementById('statusBox');
-
         try {
-            // 0x00を送ってArduino側のsystemPowerOnフラグを折る
             await powerChar.writeValueWithResponse(new Uint8Array([0]));
-            
-            // UI上の終了演出
-            statusBox.innerText = "シャットダウン開始 (約30秒後に停止)";
+            statusBox.innerText = "シャットダウン開始";
             statusBox.className = "status-box shutdown";
-            document.getElementById('console').innerText = "Power OFF signal sent. Device entering standby.";
-            
-            // 全ボタンを無効化
             document.querySelectorAll('button').forEach(b => b.disabled = true);
-            
-            // 終了通知音（低音で長め）
             playTone(220, 0.6, 'square', 0.05);
-
         } catch (e) {
-            console.error(e);
-            alert("電源オフ指令の送信に失敗しました: " + e.message);
+            alert("失敗: " + e.message);
             isCommunicating = false;
         }
     }
@@ -241,7 +232,6 @@
     function stopAndSave(finalCount) {
         const label = getSelectedLabel();
         const statusBox = document.getElementById('statusBox');
-        
         if (finalCount > 20) {
             const blob = new Blob([csvData], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
